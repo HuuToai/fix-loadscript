@@ -1,0 +1,162 @@
+services:
+  app:
+    image: "edu/app-pm:0.0.1"
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: pm-app
+    volumes:
+      - "./pm-backend/:/opt/sources/web/"
+      - "./docker/php/php-conf-88.ini:/usr/local/etc/php/conf.d/docker-php-custom.ini"
+    networks:
+      - app-project-manager
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5" # Sử dụng tối đa 1.5 CPU
+          memory: "1GB" # Giới hạn RAM là 1GB
+        reservations:
+          cpus: "0.5" # Đảm bảo tối thiểu 0.5 CPU
+          memory: "512MB" # Đảm bảo tối thiểu 512MB
+
+
+  apache:
+    image: httpd:2.4
+    container_name: pm-apache
+    env_file:
+      - ./pm-backend/.env
+    networks:
+      - app-project-manager
+    expose:
+      - 8080
+    volumes:
+      - "./pm-backend/:/opt/sources/web"
+      - "./docker/httpd/httpd.conf:/usr/local/apache2/conf/httpd.conf:ro"
+      - "./docker/logs/apache2/:/usr/local/apache2/logs/:rw"
+    depends_on:
+      - app
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"        # Giới hạn tối đa 1 CPU
+          memory: "512MB"    # Giới hạn tối đa 512MB RAM
+        reservations:
+          cpus: "0.5"        # Đảm bảo tối thiểu 0.5 CPU
+          memory: "256MB"    # Đảm bảo tối thiểu 256MB RAM
+  nginx:
+    image: "edu/app-nginx:0.0.1"
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+    container_name: pm-nginx
+    restart: unless-stopped
+    tty: true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "./pm-backend/:/opt/sources/web"
+      - "./pm-frontend/dist/:/opt/sources/frontend"
+      - "./docker/nginx/conf.d:/etc/nginx/conf.d"
+      - "./docker/nginx/nginx.conf:/etc/nginx/nginx.conf"
+      - "./docker/nginx/certs:/etc/nginx/certs"
+    networks:
+      - app-project-manager
+    depends_on:
+      - apache
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "512MB"
+        reservations:
+          cpus: "0.5"
+          memory: "256MB"
+
+
+  mysql:
+    image: 'mysql/mysql-server:8.0'
+    ports:
+      - '3309:3306'
+    container_name: pm-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: '${DB_PASSWORD}'
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_DATABASE: '${DB_DATABASE}'
+      MYSQL_USER: '${DB_USERNAME}'
+      MYSQL_PASSWORD: '${DB_PASSWORD}'
+      MYSQL_ALLOW_EMPTY_PASSWORD: 1
+    volumes:
+      - 'db-mysql:/var/lib/mysql'
+      - './docker/mysql/create-testing-database.sh:/docker-entrypoint-initdb.d/10-create-testing-database.sh'
+    networks:
+      app-project-manager:
+        aliases:
+          - mysql
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2GB"
+        reservations:
+          cpus: "1.0"
+          memory: "1GB"
+
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-p${DB_PASSWORD}"]
+      retries: 3
+      timeout: 5s
+
+  mongo:
+    image: 'mongo:7.0'
+    restart: always
+    container_name: pm-mongodb
+    ports:
+      - '${MONGODB_PORT}:27017'
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: '${MONGODB_USERNAME}'
+      MONGO_INITDB_ROOT_PASSWORD: '${MONGODB_PASSWORD}'
+      MONGO_INITDB_DATABASE: '${MONGODB_DATABASE}'
+    volumes:
+      - 'db-mongodb:/data/db'
+    networks:
+      - app-project-manager
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1GB"
+        reservations:
+          cpus: "0.5"
+          memory: "512MB"
+
+  redis:
+    image: redis:6.2-alpine
+    restart: always
+    container_name: pm-redis-cache
+    ports:
+      - '6379:6379'
+    command: redis-server --save 20 1 --loglevel warning --requirepass '${REDIS_PASSWORD}'
+    volumes:
+      - db-cache:/data
+    networks:
+      - app-project-manager
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "256MB"
+        reservations:
+          cpus: "0.2"
+          memory: "128MB"
+networks:
+  app-project-manager:
+    driver: bridge
+
+volumes:
+  db-mysql:
+    driver: local
+  db-mongodb:
+    driver: local
+  db-cache:
+    driver: local
